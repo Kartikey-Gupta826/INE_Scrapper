@@ -1,0 +1,19 @@
+{
+	"name": "price-tracker-backend",
+	"version": "1.0.0",
+	"description": "INE Product Price Tracker backend",
+	"main": "server.js",
+	"scripts": {
+		"dev": "node --watch server.js",
+		"start": "node server.js",
+		"scrape": "node runScrapeJob.js",
+		"headed": "node runHeadedScrape.js"
+	},
+	"dependencies": {
+		"cors": "^2.8.5",
+		"dotenv": "^16.4.5",
+		"express": "^4.21.2",
+		"playwright": "^1.55.0",
+		"pg": "^8.16.3"
+	}
+}
