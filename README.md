@@ -1,79 +1,133 @@
-# Product Price Tracker
+# INE Price Tracker
 
-## Stack
-- Frontend: React + Vite → deploy to Vercel
-- Backend: Node.js + Express → deploy to Render
-- Database: Supabase (Postgres)
-- Scraping: axios + cheerio (lightweight HTTP), Playwright available for headed-mode recording only
-- Scheduling: external cron (cron-job.org) hitting `POST /api/scrape/run` every 2 hours
+A React and Express application that scrapes product cards from the INE demo
+store and lets you download the extracted catalog rows as CSV. Scraping uses
+Playwright.
 
-## 1. Before writing code
-Open https://demo.inelabteamdev.com in devtools and inspect the actual HTML:
-whether product/price data is in the initial response or loaded via JS, the
-real class names for price/stock, how "options" (variants) are marked up, and
-the product-ID pattern in the URL. Update the selectors in
-`backend/src/scraper.js` (marked with `NOTE`) to match — the ones shipped here
-are placeholders.
+## Requirements
 
-## 2. Database
-1. Create a Supabase project.
-2. Run `backend/schema.sql` in the Supabase SQL editor.
-3. Copy your project URL and service role key.
+- Node.js and npm
+- A PostgreSQL database; Supabase Postgres is supported
+- Playwright Chromium for browser-based store access
 
-## 3. Backend setup
-```
+## Database setup
+
+Create a PostgreSQL database and run [`database/schema.sql`](database/schema.sql)
+against it. The schema is used by the separate tracked-product price history
+job; catalog-card extraction does not write to the database.
+
+## Local development
+
+Install and configure the backend in one terminal:
+
+```sh
 cd backend
-cp .env.example .env   # fill in SUPABASE_URL, SUPABASE_SERVICE_KEY, CRON_SECRET
 npm install
-npm run dev
-```
-Runs on http://localhost:3001.
-
-## 4. Frontend setup
-```
-cd frontend
-cp .env.example .env   # set VITE_API_BASE to your backend URL
-npm install
-npm run dev
-```
-
-## 5. Scheduling
-Deploy backend to Render. In cron-job.org, create a job that sends:
-```
-POST https://your-backend.onrender.com/api/scrape/run
-Header: x-cron-secret: <same value as CRON_SECRET in .env>
-```
-Schedule: every 2 hours. This avoids relying on an always-on process, since
-Render's free tier sleeps.
-
-## 6. Headed-mode recording
-```
-cd backend
-npm install playwright
 npx playwright install chromium
-npm run headed -- https://demo.inelabteamdev.com/product/<some-id>
 ```
-This opens a visible browser window and logs how it handles a slow/failing
-load and retries — record your screen while running this for the deliverable.
 
-## 7. Deploy
-- Backend → Render (Node service, `npm start`, set the same env vars).
-- Frontend → Vercel (set `VITE_API_BASE` to the Render URL).
-- Add at least 2–3 tracked products via the UI once both are live, and let
-  the cron run unattended for a while before submitting so the history/log
-  reflect real runs.
+Create `backend/.env` with the database connection string. The other settings
+are optional:
 
-## Environment variables
-| Variable | Where | Purpose |
+```dotenv
+SUPABASE_DB_URL=postgresql://user:password@host:5432/database
+PORT=5000
+STORE_BASE_URL=https://demo.inelabteamdev.com
+SCRAPE_TIMEOUT=30000
+SCRAPE_RETRIES=3
+HEADLESS=true
+```
+
+Start the API:
+
+```sh
+npm run dev
+```
+
+The API listens on `http://localhost:5000` by default. In another terminal,
+configure and start the frontend:
+
+```sh
+cd frontend
+npm install
+```
+
+Create `frontend/.env`:
+
+```dotenv
+VITE_API_URL=http://localhost:5000
+```
+
+Then run:
+
+```sh
+npm run dev
+```
+
+Vite prints the frontend URL when it starts.
+
+## Backend commands
+
+Run these from `backend/`:
+
+| Command | Purpose |
+|---|---|
+| `npm run dev` | Start the API with Node watch mode |
+| `npm start` | Start the API normally |
+| `npm run scrape` | Run one scrape job immediately, then exit |
+| `npm run headed` | Run the hard-coded demo product scrape in a visible browser |
+
+## Catalog scraper
+
+The main page has a **Scrape catalog** button. It reads product cards across
+the store's catalog pages and displays product name, brand, SKU, numeric product
+ID, and item URL. The ID is extracted from the SKU (for example,
+`SK-2381-QU` becomes `/item/2381`). Use **Get price** on a row to load that
+product's live price and stock. **Track** adds it to the scheduled set.
+**Download CSV** exports all visible rows, including any current or latest
+tracked price and stock.
+
+The UI calls `POST /api/scrape/catalog` to collect card data and
+`POST /api/scrape/product` to load a single current quote. Catalog card data
+does not require a database. Tracking and scheduled price history do.
+
+## Tracked-product scheduling
+
+There is no scheduler loop running inside this application. The tracked
+price-history job can be run once with `npm run scrape`. For automatic runs,
+configure an external scheduler such as cron-job.org to send a `POST` request
+every two hours to:
+
+```text
+https://<backend-host>/api/scrape/trigger
+```
+
+This endpoint scrapes active products already tracked in PostgreSQL, retries
+failed attempts, and stores successful price/stock history and per-attempt logs.
+The endpoint currently has no authentication; protect it before making it
+publicly reachable. The cron schedule itself must be configured in the external
+service; it is not created by this repository.
+
+## API routes
+
+| Method | Path | Purpose |
 |---|---|---|
-| SUPABASE_URL | backend | Supabase project URL |
-| SUPABASE_SERVICE_KEY | backend | Supabase service role key |
-| CRON_SECRET | backend | Shared secret to authorize `/api/scrape/run` |
-| STORE_BASE_URL | backend | Mock store base URL |
-| VITE_API_BASE | frontend | Backend API base URL |
+| `GET` | `/` | API health check |
+| `GET` | `/api/products` | List tracked products |
+| `POST` | `/api/products` | Add a product to tracking |
+| `GET` | `/api/products/:id` | Get a tracked product |
+| `GET` | `/api/products/:id/history` | Get price history |
+| `GET` | `/api/products/:id/logs` | Get scrape logs |
+| `GET` | `/api/export` | Download scrape history as CSV |
+| `POST` | `/api/scrape/catalog` | Scrape the first five catalog cards for the UI |
+| `POST` | `/api/scrape/product` | Retry and return one product's current price and stock |
+| `POST` | `/api/scrape/trigger` | Run the tracked-product price scrape job |
 
-## Design note (fill in before submitting)
-Document: how you made scraping reliable (retries, backoff, async-wait,
-validation against garbage data), trade-offs made, and — since AI tools were
-used to help write this — what the AI got wrong on the first pass and how you
-fixed it.
+## Deployment configuration
+
+Set `SUPABASE_DB_URL` and any desired backend settings in the backend hosting
+environment. Install the Playwright Chromium browser as part of deployment.
+Set `VITE_API_URL` to the deployed backend URL when building the frontend.
+
+`VITE_API_URL` is compiled into the frontend build, so it must be set before
+building the frontend for deployment.

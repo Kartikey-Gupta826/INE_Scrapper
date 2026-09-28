@@ -23,10 +23,20 @@ async function query(text, params = []) {
 
 async function getActiveTrackedProducts() {
     const result = await query(`
-        SELECT *
+        SELECT tracked_products.*,
+            latest.price AS current_price,
+            latest.stock AS current_stock,
+            latest.timestamp AS last_scraped_at
         FROM tracked_products
-        WHERE active = TRUE
-        ORDER BY created_at ASC
+        LEFT JOIN LATERAL (
+            SELECT price, stock, timestamp
+            FROM price_history
+            WHERE tracked_product_id = tracked_products.id
+            ORDER BY timestamp DESC
+            LIMIT 1
+        ) AS latest ON TRUE
+        WHERE tracked_products.active = TRUE
+        ORDER BY tracked_products.created_at ASC
     `);
 
     return result.rows;
@@ -73,6 +83,18 @@ async function createTrackedProduct({
     );
 
     return result.rows[0];
+}
+
+
+async function updateTrackedProductOption(id, selectedOption) {
+    await query(
+        `
+        UPDATE tracked_products
+        SET selected_option = $2
+        WHERE id = $1
+        `,
+        [id, selectedOption]
+    );
 }
 
 
@@ -178,6 +200,7 @@ module.exports = {
     getActiveTrackedProducts,
     getTrackedProductById,
     createTrackedProduct,
+    updateTrackedProductOption,
 
     savePriceHistory,
     getPriceHistory,

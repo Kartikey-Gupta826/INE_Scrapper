@@ -21,14 +21,10 @@ async function scrapeProduct(page, product) {
         product.product_url ||
         `${STORE_BASE_URL}/item/${product.store_product_id}`;
 
-    const selectedOption = product.selected_option;
+    let selectedOption = product.selected_option;
 
     if (!product.store_product_id) {
         throw new Error("Missing store product ID");
-    }
-
-    if (!selectedOption) {
-        throw new Error("Missing selected product option");
     }
 
     console.log(
@@ -49,8 +45,7 @@ async function scrapeProduct(page, product) {
     // 2. Verify that the product exists
     // -----------------------------------------------------
 
-    const productNameElement =
-        page.locator(".pdp-summary h1");
+    const productNameElement = page.locator("h1").first();
 
     await productNameElement.waitFor({
         state: "visible",
@@ -71,57 +66,37 @@ async function scrapeProduct(page, product) {
     // 3. Select requested option
     // -----------------------------------------------------
 
-    const optionButton = page
-        .locator(".opt-picker button.opt-chip")
-        .filter({
-            hasText: selectedOption
+    const optionButtons = page.locator(".opt-chip");
+    const optionCount = await optionButtons.count();
+    let optionButton;
+
+    if (selectedOption && selectedOption !== "Default") {
+        optionButton = page.getByRole("button", {
+            name: selectedOption,
+            exact: true
         });
 
-    const optionCount = await optionButton.count();
-
-    if (optionCount === 0) {
-        throw new Error(
-            `Option "${selectedOption}" was not found`
-        );
+        if (await optionButton.count() !== 1) {
+            throw new Error(`Option "${selectedOption}" was not found`);
+        }
+    } else if (optionCount > 0) {
+        optionButton = optionButtons.first();
+        selectedOption = (await optionButton.innerText()).trim();
+    } else {
+        selectedOption = "Default";
     }
 
-    if (optionCount > 1) {
-        throw new Error(
-            `Multiple buttons found for option "${selectedOption}"`
-        );
-    }
-
-    await optionButton.click();
-
-
-    // -----------------------------------------------------
-    // 4. Verify option was actually selected
-    // -----------------------------------------------------
-
-    await page.waitForFunction(
-        (optionText) => {
-            const buttons = [
-                ...document.querySelectorAll(
-                    ".opt-picker button.opt-chip"
-                )
-            ];
-
-            return buttons.some((button) => {
-                return (
-                    button.textContent.trim() === optionText &&
-                    button.getAttribute("aria-pressed") === "true"
-                );
-            });
-        },
-        selectedOption
-    );
-
-    const selectedState =
-        await optionButton.getAttribute("aria-pressed");
-
-    if (selectedState !== "true") {
-        throw new Error(
-            `Failed to select option "${selectedOption}"`
+    if (optionButton && await optionButton.getAttribute("aria-pressed") !== "true") {
+        await optionButton.click();
+        await page.waitForFunction(
+            (optionText) => Array.from(
+                document.querySelectorAll(".opt-chip")
+            ).some((button) =>
+                button.textContent.trim() === optionText &&
+                button.getAttribute("aria-pressed") === "true"
+            ),
+            selectedOption,
+            { timeout: SCRAPE_TIMEOUT }
         );
     }
 
@@ -132,20 +107,37 @@ async function scrapeProduct(page, product) {
     // 5. Find "Check today's price" button
     // -----------------------------------------------------
 
-    const priceButton = page.getByRole("button", {
-        name: /check today's price/i
-    });
+    const priceButton = page.locator(".offer-panel button");
 
     await priceButton.waitFor({
         state: "visible",
         timeout: SCRAPE_TIMEOUT
     });
 
+    const priceArea = page.locator(".offer-panel > div");
+    const priceAreaBox = await priceArea.boundingBox();
 
-    // -----------------------------------------------------
-    // 6. Trigger dynamic price loading
-    // -----------------------------------------------------
+    if (!priceAreaBox) {
+        throw new Error("Price area could not be found");
+    }
 
+    for (let move = 0; move < 9; move++) {
+        await page.mouse.move(
+            priceAreaBox.x + 5 + move * 10,
+            priceAreaBox.y + priceAreaBox.height / 2
+        );
+        await page.waitForTimeout(50);
+    }
+
+    await page.waitForTimeout(650);
+    await page.waitForFunction(
+        () => {
+            const button = document.querySelector(".offer-panel button");
+            return button && !button.disabled;
+        },
+        null,
+        { timeout: SCRAPE_TIMEOUT }
+    );
     await priceButton.click();
 
     console.log("Requested current price...");
@@ -189,23 +181,37 @@ async function scrapeProduct(page, product) {
     // Therefore we specifically select the visible <b>.
     // -----------------------------------------------------
 
-    const priceElement =
-        readyOffer.locator(".offer-row b:visible");
+    await page.waitForFunction(
+        () => {
+            const panel = document.querySelector(".offer-panel");
+            const price = panel?.querySelector(".offer-row strong");
+
+            return panel?.classList.contains("offer-ready") &&
+                price &&
+                getComputedStyle(price).opacity === "1" &&
+                !panel.innerText.includes("Refreshing prices");
+        },
+        null,
+        { timeout: SCRAPE_TIMEOUT }
+    );
+
+    const priceElement = readyOffer.locator(".offer-row strong:visible");
 
     await priceElement.waitFor({
         state: "visible",
         timeout: SCRAPE_TIMEOUT
     });
 
-    const priceText =
-        (await priceElement.textContent())?.trim();
+    const priceText = (await priceElement.innerText())
+        ?.replace(/[\u200B-\u200D\uFEFF]/g, "")
+        .trim();
 
     if (!priceText) {
         throw new Error("Current price was empty");
     }
 
     const price = Number(
-        priceText.replace(/[₹,\s]/g, "")
+        priceText.replace(/[^\d.]/g, "")
     );
 
     if (!Number.isFinite(price) || price <= 0) {
@@ -234,16 +240,16 @@ async function scrapeProduct(page, product) {
         throw new Error("Stock information was empty");
     }
 
-    const stockMatch =
-        stockText.match(/(\d+)\s+remaining/i);
+    const stockMatch = stockText.match(/(\d+)\s+remaining/i);
+    const stock = /sold out/i.test(stockText)
+        ? 0
+        : stockMatch
+            ? Number(stockMatch[1])
+            : NaN;
 
-    if (!stockMatch) {
-        throw new Error(
-            `Could not parse stock: "${stockText}"`
-        );
+    if (!Number.isInteger(stock)) {
+        throw new Error(`Could not parse stock: "${stockText}"`);
     }
-
-    const stock = Number(stockMatch[1]);
 
     if (!Number.isInteger(stock) || stock < 0) {
         throw new Error(

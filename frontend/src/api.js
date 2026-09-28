@@ -13,12 +13,24 @@ async function request(url, options = {}) {
     return data;
 }
 
-export async function searchProducts(query) {
-    const data = await request(
-        `/api/search?q=${encodeURIComponent(query)}`
-    );
+export async function scrapeCatalog() {
+    const data = await request("/api/scrape/catalog", {
+        method: "POST",
+    });
 
     return data.products;
+}
+
+export async function scrapeProduct(product) {
+    const data = await request("/api/scrape/product", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify(product),
+    });
+
+    return data.product;
 }
 
 export async function getTrackedProducts() {
@@ -37,6 +49,14 @@ export async function trackProduct(product) {
     });
 
     return data.product;
+}
+
+export async function searchProducts(query) {
+    const data = await request(
+        `/api/search?q=${encodeURIComponent(query)}`
+    );
+
+    return data.products;
 }
 
 export async function getHistory(productId) {

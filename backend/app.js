@@ -41,6 +41,10 @@ app.use("/api/export", require("./routes/export"));
 
 app.use("/api/scrape", require("./routes/scrape"));
 
+app.use((req, res, next) => {
+    console.log(`No route matched: ${req.method} ${req.originalUrl}`);
+    next();
+});
 
 // ---------------------------------------------------------
 // 404 handler

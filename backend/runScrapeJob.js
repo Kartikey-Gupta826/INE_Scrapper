@@ -3,7 +3,8 @@ require("dotenv").config();
 const {
     getActiveTrackedProducts,
     savePriceHistory,
-    createScrapeLog
+    createScrapeLog,
+    updateTrackedProductOption
 } = require("./db");
 
 const { createBrowser } = require("./scraper/browser");
@@ -61,6 +62,13 @@ async function scrapeTrackedProduct(browser, product) {
 
                 // Save history only for successful scrapes.
                 if (outcome === "success") {
+                    if (product.selected_option === "Default") {
+                        await updateTrackedProductOption(
+                            product.id,
+                            result.selectedOption
+                        );
+                    }
+
                     await savePriceHistory({
                         trackedProductId: product.id,
                         price: result.price,
